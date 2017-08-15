@@ -1,5 +1,3 @@
-
-
 /*-
  *   BSD LICENSE
  *
@@ -49,39 +47,41 @@
 #include <rte_debug.h>
 #include <rte_hexdump.h>
 #include <rte_log.h>
+#include <rte_common.h>
+#include <rte_ring.h>
 #include <rte_mbuf.h>
-
-
+#include <rte_errno.h>
+#include <rte_byteorder.h>
 
 enum eth_type {
-	eth_ipv4 = 0x0800,
-	eth_arp  = 0x0806,
-	eth_ipv6 = 0x86dd,
+  eth_ipv4 = 0x0800,
+  eth_arp  = 0x0806,
+  eth_ipv6 = 0x86dd,
 };
 
 struct eth_hdr {
-	uint8_t  dst[6];
-	uint8_t  src[6];
-	uint16_t type;
+  uint8_t  dst[6];
+  uint8_t  src[6];
+  uint16_t type;
 } __attribute__((__packed__));
 
 enum ip_proto {
-	ipproto_icmp = 1,
-	ipproto_tcp  = 6,
-	ipproto_udp  = 17,
+  ipproto_icmp = 1,
+  ipproto_tcp  = 6,
+  ipproto_udp  = 17,
 };
 
 struct ip4_hdr {
-	uint8_t  version_ihl;
-	uint8_t  tos;
-	uint16_t totlen;
-	uint16_t id;
-	uint16_t flag_off;
-	uint8_t  ttl;
-	uint8_t  proto;
-	uint16_t checksum;
-	uint8_t  src[4];
-	uint8_t  dst[4];
+  uint8_t  version_ihl;
+  uint8_t  tos;
+  uint16_t totlen;
+  uint16_t id;
+  uint16_t flag_off;
+  uint8_t  ttl;
+  uint8_t  proto;
+  uint16_t checksum;
+  uint8_t  src[4];
+  uint8_t  dst[4];
 } __attribute__((__packed__));
 
 struct udp_hdr {
@@ -91,54 +91,116 @@ struct udp_hdr {
   uint16_t cksum;
 } __attribute__((__packed__));
 
+struct dns_hdr {
+  uint16_t src_port;
+  uint16_t dst_port;
+  uint16_t len;
+  uint16_t cksum;
+} __attribute__((__packed__));
 
 static struct rte_mbuf* get_pkt(void)
 {
-	static const unsigned char dns_pkt[] = {
-		0x74, 0x03, 0xbd, 0x3d, 0x78, 0x96, 0x00, 0xa0,
-		0xde, 0xc6, 0x52, 0x07, 0x08, 0x00, 0x45, 0x00,
-		0x00, 0x48, 0x09, 0x47, 0x00, 0x00, 0xff, 0x11,
-		0x59, 0x16, 0xac, 0x14, 0x00, 0x01, 0xac, 0x14,
-		0x01, 0x1e, 0x00, 0x35, 0xd2, 0xf4, 0x00, 0x34,
-		0x73, 0x43, 0xb0, 0x00, 0x81, 0x80, 0x00, 0x01,
-		0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x64,
-		0x70, 0x64, 0x6b, 0x05, 0x6e, 0x69, 0x6e, 0x6a,
-		0x61, 0x00, 0x00, 0x01, 0x00, 0x01, 0xc0, 0x0c,
-		0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x08, 0x39,
-		0x00, 0x04, 0xa3, 0x2c, 0xa5, 0x31
-	};
+  static const unsigned char dns_pkt[] = {
+    0x74, 0x03, 0xbd, 0x3d, 0x78, 0x96, 0x00, 0xa0,
+    0xde, 0xc6, 0x52, 0x07, 0x08, 0x00, 0x45, 0x00,
+    0x00, 0x48, 0x09, 0x47, 0x00, 0x00, 0xff, 0x11,
+    0x59, 0x16, 0xac, 0x14, 0x00, 0x01, 0xac, 0x14,
+    0x01, 0x1e, 0x00, 0x35, 0xd2, 0xf4, 0x00, 0x34,
+    0x73, 0x43, 0xb0, 0x00, 0x81, 0x80, 0x00, 0x01,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x04, 0x64,
+    0x70, 0x64, 0x6b, 0x05, 0x6e, 0x69, 0x6e, 0x6a,
+    0x61, 0x00, 0x00, 0x01, 0x00, 0x01, 0xc0, 0x0c,
+    0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x08, 0x39,
+    0x00, 0x04, 0xa3, 0x2c, 0xa5, 0x31
+  };
 
-	const size_t NUM_MBUFS = 8191;
-	const size_t MBUF_CACHE_SIZE = 250;
-	struct rte_mempool *mempool;
-	mempool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
-		MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
-	if (mempool == NULL)
-		rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
+  const size_t NUM_MBUFS = 8191;
+  const size_t MBUF_CACHE_SIZE = 250;
+  struct rte_mempool *mempool;
+  mempool = rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS,
+    MBUF_CACHE_SIZE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, rte_socket_id());
+  if (mempool == NULL)
+    rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
-	struct rte_mbuf* m = rte_pktmbuf_alloc(mempool);
-	uint8_t* p = rte_pktmbuf_mtod(m, uint8_t*);
-	size_t   l = sizeof(dns_pkt);
-	m->pkt_len  = l;
-	m->data_len = l;
-	memcpy(p, dns_pkt, l);
-	return m;
+  struct rte_mbuf* m = rte_pktmbuf_alloc(mempool);
+  uint8_t* p = rte_pktmbuf_mtod(m, uint8_t*);
+  size_t   l = sizeof(dns_pkt);
+  m->pkt_len  = l;
+  m->data_len = l;
+  memcpy(p, dns_pkt, l);
+  return m;
 }
 
 static void analyze_packet(struct rte_mbuf* m)
 {
-	rte_hexdump(stdout, "Packet-Hexdump",
-			rte_pktmbuf_mtod(m, uint8_t*), m->pkt_len);
+  struct eth_hdr *eth;
+  struct ip4_hdr *ip;
+  struct udp_hdr *udp;
+  struct dns_hdr *dns;
+
+  eth = rte_pktmbuf_mtod(m, struct eth_hdr *);
+  printf("=====DATA LINK=====\n");
+  printf("dst %02x:%02x:%02x:%02x:%02x:%02x\n", eth->dst[0], eth->dst[1], eth->dst[2], eth->dst[3], eth->dst[4], eth->dst[5]);
+  printf("src %02x:%02x:%02x:%02x:%02x:%02x\n", eth->src[0], eth->src[1], eth->src[2], eth->src[3], eth->src[4], eth->src[5]);
+  //printf("type\n%x", rte_be_to_cpu_16(eth->type));
+  switch(rte_be_to_cpu_16(eth->type)){
+    case eth_ipv4:
+      printf("type IPv4\n");
+      break;
+    case eth_arp:
+      printf("type ARP\n");
+      break;
+    case eth_ipv6:
+      printf("type IPv6\n");
+      break;
+    default:
+      printf("type error\n");
+      break;
+  }
+
+  ip = (struct ip4_hdr *)(eth+1);
+  printf("=====NETWORK=====\n");
+  printf("Version %02x\n", (ip->version_ihl & 0xf0) >> 4);
+  printf("Header Length %d\n", (ip->version_ihl & 0x0f) * 4);
+  printf("Type of Service %d\n", ip->tos);
+  printf("Total Length%d\n", rte_be_to_cpu_16(ip->totlen));
+  printf("Identification %d\n", rte_be_to_cpu_16(ip->id));
+  printf("Type of Service %d\n", rte_be_to_cpu_16(ip->flag_off));
+  printf("Time to Live %d\n", ip->ttl);
+  printf("Protocol %d\n", ip->proto);
+  switch(ip->proto){
+    case ipproto_icmp:
+      printf("Protocol ICMP\n");
+      break;
+    case ipproto_tcp:
+      printf("Protocol TCP\n");
+      break;
+    case ipproto_udp:
+      printf("Protocol UDP\n");
+      break;
+    default:
+      printf("Protocol error\n");
+      break;
+  }
+  printf("Checksum %d\n", rte_be_to_cpu_16(ip->checksum));
+  printf("Source %3d.%3d.%3d.%3d\n", ip->dst[0], ip->dst[1], ip->dst[2], ip->dst[3]);
+  printf("Destination %3d.%3d.%3d.%3d\n", ip->src[0], ip->src[1], ip->src[2], ip->src[3]);
+
+  udp = (struct udp_hdr *)(ip+1);
+  dns = (struct dns_hdr *)(udp+1);
+  (void)(dns);
+
+  rte_hexdump(stdout, "Packet-Hexdump",
+      rte_pktmbuf_mtod(m, uint8_t*), m->pkt_len);
 }
 
 int main(int argc, char **argv)
 {
-	int ret = rte_eal_init(argc, argv);
-	if (ret < 0) rte_panic("Cannot init EAL\n");
+  //rte_log_set_global_level(RTE_LOG_EMERG);
+  int ret = rte_eal_init(argc, argv);
+  if (ret < 0) rte_panic("Cannot init EAL\n");
 
-	struct rte_mbuf* m = get_pkt();
-	analyze_packet(m);
-	return 0;
+  struct rte_mbuf* m = get_pkt();
+  analyze_packet(m);
+  return 0;
 }
-
-
