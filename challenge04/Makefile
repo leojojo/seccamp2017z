@@ -38,7 +38,7 @@ include $(RTE_SDK)/mk/rte.vars.mk
 APP = pkt_analyze
 
 # all source are stored in SRCS-y
-SRCS-y := main.c
+SRCS-y := main.c protocol.c
 
 CFLAGS += $(WERROR_FLAGS)
 
