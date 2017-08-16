@@ -33,6 +33,7 @@
  */
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdint.h>
 #include <errno.h>
@@ -92,10 +93,19 @@ struct udp_hdr {
 } __attribute__((__packed__));
 
 struct dns_hdr {
-  uint16_t src_port;
-  uint16_t dst_port;
+  uint16_t id;
+  uint16_t flags;
+  uint16_t qdcount;
+  uint16_t ancount;
+  uint16_t nscount;
+  uint16_t arcount;
+} __attribute__((__packed__));
+
+struct resrec {
+  uint16_t type;
+  uint16_t class;
+  uint32_t ttl;
   uint16_t len;
-  uint16_t cksum;
 } __attribute__((__packed__));
 
 static struct rte_mbuf* get_pkt(void)
@@ -131,35 +141,83 @@ static struct rte_mbuf* get_pkt(void)
   return m;
 }
 
+static bool
+is_printable_char(char c){
+  return ((c >= 'a' && c <= 'z') ||
+          (c >= 'A' && c <= 'Z') ||
+          (c >= '0' && c <= '9'));
+}
+
+static int
+domain_reader(uint8_t *dns_pointer){
+  uint8_t * c;
+  uint8_t len;
+  char domain[100];
+
+  c = dns_pointer;
+  while(*c != 0){
+    c++;
+  }
+  len = c - dns_pointer + 1; // for memory
+  memcpy(domain, dns_pointer+1, len-1);  //length of domain name (dpdk.ninja)
+  for(int i = 0; i < len - 2; i++){  // pre&post counts '4'dpdk5ninja'0'
+    if(!is_printable_char(domain[i]))
+      domain[i] = '.';
+  }
+  printf("Domain %s\n", domain);
+
+  return len;
+}
+
+static size_t analyze_rr(uint8_t * ptr){
+  const uint8_t * const ptr_head = ptr;
+  if(*ptr == 0xc0){
+    ptr++;
+    printf("Offset 0x%x\n", *ptr);
+    ptr++;
+  } else{
+    ptr += domain_reader(ptr);
+  }
+  struct resrec *rr = (struct resrec *)(ptr);
+  printf("Type %x\n", rte_be_to_cpu_16(rr->type));
+  printf("Class %x\n", rte_be_to_cpu_16(rr->class));
+  printf("Time to Live %d\n", rte_be_to_cpu_32(rr->ttl));
+  printf("Length %x\n", rte_be_to_cpu_16(rr->len));
+  ptr += sizeof(struct resrec);
+  return ptr - ptr_head;
+}
+
 static void analyze_packet(struct rte_mbuf* m)
 {
   struct eth_hdr *eth;
   struct ip4_hdr *ip;
   struct udp_hdr *udp;
   struct dns_hdr *dns;
+  size_t length = m->pkt_len;
 
   eth = rte_pktmbuf_mtod(m, struct eth_hdr *);
-  printf("=====DATA LINK=====\n");
+  if (length < sizeof(struct eth_hdr)) return ; // error
+  printf("\n=====DATA LINK=====\n");
   printf("dst %02x:%02x:%02x:%02x:%02x:%02x\n", eth->dst[0], eth->dst[1], eth->dst[2], eth->dst[3], eth->dst[4], eth->dst[5]);
   printf("src %02x:%02x:%02x:%02x:%02x:%02x\n", eth->src[0], eth->src[1], eth->src[2], eth->src[3], eth->src[4], eth->src[5]);
   //printf("type\n%x", rte_be_to_cpu_16(eth->type));
   switch(rte_be_to_cpu_16(eth->type)){
     case eth_ipv4:
-      printf("type IPv4\n");
+      printf("Type IPv4\n");
       break;
     case eth_arp:
-      printf("type ARP\n");
+      printf("Type ARP\n");
       break;
     case eth_ipv6:
-      printf("type IPv6\n");
+      printf("Type IPv6\n");
       break;
     default:
-      printf("type error\n");
+      printf("Type error\n");
       break;
   }
 
   ip = (struct ip4_hdr *)(eth+1);
-  printf("=====NETWORK=====\n");
+  printf("\n=====NETWORK=====\n");
   printf("Version %02x\n", (ip->version_ihl & 0xf0) >> 4);
   printf("Header Length %d\n", (ip->version_ihl & 0x0f) * 4);
   printf("Type of Service %d\n", ip->tos);
@@ -167,7 +225,7 @@ static void analyze_packet(struct rte_mbuf* m)
   printf("Identification %d\n", rte_be_to_cpu_16(ip->id));
   printf("Type of Service %d\n", rte_be_to_cpu_16(ip->flag_off));
   printf("Time to Live %d\n", ip->ttl);
-  printf("Protocol %d\n", ip->proto);
+  //printf("Protocol %d\n", ip->proto);
   switch(ip->proto){
     case ipproto_icmp:
       printf("Protocol ICMP\n");
@@ -187,16 +245,66 @@ static void analyze_packet(struct rte_mbuf* m)
   printf("Destination %3d.%3d.%3d.%3d\n", ip->src[0], ip->src[1], ip->src[2], ip->src[3]);
 
   udp = (struct udp_hdr *)(ip+1);
-  dns = (struct dns_hdr *)(udp+1);
-  (void)(dns);
+  printf("\n=====TRANSPORT=====\n");
+  printf("Source Port %d\n", rte_be_to_cpu_16(udp->src_port));
+  printf("Destination Port %d\n", rte_be_to_cpu_16(udp->dst_port));
+  printf("Length %d\n", rte_be_to_cpu_16(udp->len));
+  printf("Checksum %d\n", rte_be_to_cpu_16(udp->cksum));
 
+  dns = (struct dns_hdr *)(udp+1);
+  uint16_t qdc = rte_be_to_cpu_16(dns->qdcount);
+  uint16_t anc = rte_be_to_cpu_16(dns->ancount);
+  uint16_t nsc = rte_be_to_cpu_16(dns->nscount);
+  uint16_t arc = rte_be_to_cpu_16(dns->arcount);
+  printf("\n=====APPLICATION=====\n");
+  printf("ID %d\n", rte_be_to_cpu_16(dns->id));
+  printf("Flags %d\n", rte_be_to_cpu_16(dns->flags));
+  printf("QD Count %d\n", qdc);
+  printf("AN Count %d\n", anc);
+  printf("NS Count %d\n", nsc);
+  printf("AR Count %d\n", arc);
+
+  uint8_t * ptr;
+  struct query {
+    uint16_t type;
+    uint16_t class;
+  } __attribute__((__packed__));
+
+  printf("\n---question---\n");
+  ptr = (uint8_t *)(dns+1);
+  for(int i = 0; i < qdc; i++){
+    ptr += domain_reader(ptr);
+    struct query *qry = (struct query *)(ptr);
+    printf("Type %x\n", rte_be_to_cpu_16(qry->type));
+    printf("Class %x\n", rte_be_to_cpu_16(qry->class));
+    ptr += sizeof(struct query);
+  }
+
+  printf("\n---answer---\n");
+  for(int i = 0; i < anc; i++){
+    ptr += analyze_rr(ptr);
+    printf("Address %3d.%3d.%3d.%3d\n", *(ptr), *(ptr+1), *(ptr+2), *(ptr+3));
+    ptr+=4;
+  }
+
+  printf("\n---authority---\n");
+  for(int i = 0; i < nsc; i++){
+    analyze_rr(ptr);
+  }
+
+  printf("\n---additional rec---\n");
+  for(int i = 0; i < arc; i++){
+    analyze_rr(ptr);
+  }
+
+  /*
   rte_hexdump(stdout, "Packet-Hexdump",
       rte_pktmbuf_mtod(m, uint8_t*), m->pkt_len);
+  */
 }
 
 int main(int argc, char **argv)
 {
-  //rte_log_set_global_level(RTE_LOG_EMERG);
   int ret = rte_eal_init(argc, argv);
   if (ret < 0) rte_panic("Cannot init EAL\n");
 
